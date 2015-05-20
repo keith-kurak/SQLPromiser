@@ -1,96 +1,102 @@
 
-function SqlOperation(sql, params, logInfo) {
+function SqlOperation(sql, params) {
 	this.sql = sql;
 	this.params = params;
-	this.logInfo = logInfo;
 }
 
 //generates promises to run WebSQLTransactions
 function SqlPromiser(db){
 	// Pending migrations to run
-	var sqlStatements = [];
+	this.sqlStatements = [];
 
-	var database = db; 
+	this.database = db; 
 
-	var isStatementExecutionLoggingOn = true;
+	//if true, will log errors that occur during individual statements
+	this.logStatementErrors = false;
 
-	var isTransactionExecutionLoggingOn = true;
+	//if true, will log errors that occur during each SQL transaction
+	this.logTransactionErrors = false;
 
-	//keeps the result of the last statement so it can be returned
-	var sqlTransactionResult;
+	//if true, will log the result of each SQL transaction
+	this.logTransactionExecution = false;
 
 	//sets sqlStatements to the operations in the queue
 	//each operation contains: sql, params, logInfo
-	this.setOperations = function(operations){
+	/*this.setOperations = function(operations){
 		sqlStatements = operations;
-	};
+	};*/
+}
 
-	//adds a sql statement to the queue- will be executed in order they are added
-	this.pushSqlStatement = function(sql, params, logInfo){
-		sqlStatements[sqlStatements.length] = {sql: sql, params: params, logInfo: logInfo};
-	};
-
-	this.clearSqlStatements = function() {
-		sqlStatements = [];
-	}
-
-	/*this.executeTransactionSerially = function(logId) {
-
-	}*/
-
-	//returns a promise to execute the transaction, including all of the pushed sql statements
-	this.executeTransaction = function(logId) {
-		var currentStatement;
-
-		var promise = new Promise(function(resolve, reject) {
-			db.transaction(
-				function(tx) {
-
-					for(var i=0; i< sqlStatements.length; i++)
-					{
-						currentStatement = sqlStatements[i];
-						tx.executeSql(currentStatement.sql,
-										currentStatement.params,
-										function(tx, result) {
-											sqlTransactionResult = result;
-											if(isStatementExecutionLoggingOn) {
-												console.log('query successful: ' + currentStatement.logId);
-											}
-										});/*,
-										function(tx, err) {
-											if(isStatementExecutionLoggingOn) {
-												console.log('query failed: ' + currentStatement.logId);
-												console.log(err);
-											}
-										});*/
-					}
-				},
-				function(error) {
-					if(isTransactionExecutionLoggingOn && logId) {
-						console.log('transaction failed: ' + logId);
-						console.log(error);
-					}
-					reject(error);
-				},
-				function() {
-					if(isTransactionExecutionLoggingOn && logId) {
-						console.log('transaction successful: ' + logId);
-					}
-					resolve(sqlTransactionResult);
+//returns a promise to execute the transaction, including all of the passed sql statements
+//If Promise is rejected, error will be passed as the variable for the promise
+//If the Promise is resolved, the transaction result of the last statement will be passed as the variable for the promise.
+//This includes query results.
+//logId is optional. If logging is enabled, the transacdtion logs will include the id. 
+SqlPromiser.prototype.executeTransactionAsync = function(sqlStatements, logId) {
+	var that = this;
+	var currentStatement;
+	var promise = new Promise(function(resolve, reject) {
+		that.db.transaction(
+			function(tx) {
+				for(var i=0; i< sqlStatements.length; i++)
+				{
+					currentStatement = sqlStatements[i];
+					tx.executeSql(currentStatement.sql,
+									currentStatement.params,
+									function(tx, result) {
+										sqlTransactionResult = result;
+									},
+									function(tx, err) {
+										if(that.logStatementErrors) {
+											that.log('query failed', err);
+										}
+									});
 				}
-			);
-		});
-		return promise;
-	}
+			},
+			function(error) {
+				if(that.logTransactionErrors || that.logTransactionExecution) {
+					that.log('transaction failed', error, logId);
+				}
+				reject(error);
+			},
+			function() {
+				if(that.logTransactionExecution) {
+					that.log('transaction successful', error, logId);
+				}
+				resolve(sqlTransactionResult); 
+			}
+		);
+	});
+	return promise;
+}
 
-	//if true, will log the result of each SQL statement if a logId is specified with the statement
-	this.setStatementExecutionLogging = function(isLoggingOn) {
-		isStatementExecutionLoggingOn = isLoggingOn;
-	}
+SqlPromiser.prototype.executePushedStatementsAsync = function(logId) {
+	return this.executeTransactionAsync(this.sqlStatements, logId).then(function(result) {
+		this.clearQueuedSqlStatements();
+		return new Promise.resolve(result);
+	},
+	function(error) {
+		return Promise.reject(error);
+	});
+}
 
-	//if true, will log the result of each SQL transaction if a logId is specified when the transaction is executed
-	this.setTransactionExecutionLogging = function(isLoggingOn) {
-		isTransactionExecutionLoggingOn = isLoggingOn;
-	}
+SqlPromiser.prototype.executeStatementAsync = function(sql, params, logId) {
+	return this.executeTransactionAsync([{sql: sql, params: params}], logId);
+}
 
+SqlPromiser.prototype.clearQueuedSqlStatements = function() {
+	sqlStatements = [];
+}
+
+//adds a sql statement to the queue- will be executed in order they are added
+SqlPromiser.prototype.pushSqlStatement = function(sql, params){
+	sqlStatements[sqlStatements.length] = {sql: sql, params: params};
+};
+
+SqlPromiser.prototype.log = function(preamble, error, logId) {
+	if(logId) {
+		console.log(preamble + ' (' + logId + '): ' + error;
+	} else {
+		console.log(preamble + ': ' + error;
+	}
 }
